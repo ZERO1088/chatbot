@@ -48,6 +48,9 @@ export function useChatVisibility({
     updateChatVisibility({
       chatId,
       visibility: updatedVisibilityType,
+    }).catch(() => {
+      // Chats restored from localStorage may not exist server-side; the local
+      // choice is already applied above, so the rejection is not fatal.
     });
   };
 

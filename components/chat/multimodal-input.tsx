@@ -684,6 +684,7 @@ const AttachmentsButton = memo(PureAttachmentsButton);
 function ModelSelectorOption({
   capabilities,
   curated,
+  deepseekDirect,
   model,
   onModelChange,
   selectedModelId,
@@ -691,12 +692,15 @@ function ModelSelectorOption({
 }: {
   capabilities: Record<string, ModelCapabilities> | undefined;
   curated: boolean;
+  deepseekDirect: boolean;
   model: ChatModel;
   onModelChange?: (modelId: string) => void;
   selectedModelId: string;
   setOpen: Dispatch<SetStateAction<boolean>>;
 }) {
   const [logoProvider] = model.id.split("/");
+  // DeepSeek models can bypass the AI Gateway when DEEPSEEK_API_KEY is set.
+  const isDirectDeepSeek = deepseekDirect && Boolean(model.deepseekApiId);
   const maybeWithTooltip = (icon: ReactNode, label: string) => {
     if (!curated) {
       return icon;
@@ -744,6 +748,14 @@ function ModelSelectorOption({
       <ModelSelectorLogo provider={logoProvider} />
       <ModelSelectorName>{model.name}</ModelSelectorName>
       <div className="ml-auto flex items-center gap-2 text-foreground/70">
+        {isDirectDeepSeek ? (
+          <span
+            className="shrink-0 rounded-full border border-border/60 px-1.5 py-px text-[9px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
+            title="Called directly with DEEPSEEK_API_KEY instead of the AI Gateway"
+          >
+            Direct
+          </span>
+        ) : null}
         {capabilities?.[model.id]?.tools
           ? maybeWithTooltip(
               <WrenchIcon className="size-3.5" />,
@@ -800,7 +812,10 @@ function PureModelSelectorCompact({
   const capabilities: Record<string, ModelCapabilities> | undefined =
     modelsData?.capabilities ?? modelsData;
   const dynamicModels: ChatModel[] | undefined = modelsData?.models;
-  const activeModels = dynamicModels ?? chatModels;
+  const deepseekDirect: boolean = modelsData?.deepseekDirect === true;
+  // An empty list (demo mode with the Gateway unreachable) must not replace the
+  // curated models, or `selectedModel` would be undefined below.
+  const activeModels = dynamicModels?.length ? dynamicModels : chatModels;
 
   const selectedModel =
     activeModels.find((m: ChatModel) => m.id === selectedModelId) ??
@@ -894,6 +909,7 @@ function PureModelSelectorCompact({
                   <ModelSelectorOption
                     capabilities={capabilities}
                     curated={curated}
+                    deepseekDirect={deepseekDirect}
                     key={model.id}
                     model={model}
                     onModelChange={onModelChange}

@@ -16,8 +16,10 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import type { ArtifactKind } from "@/components/chat/artifact";
 import type { VisibilityType } from "@/components/chat/visibility-selector";
+import { isDevBypassEnabled } from "../dev-bypass";
 import { ChatbotError } from "../errors";
 import { generateUUID } from "../utils";
+import { mockDb } from "./mock";
 import {
   type Chat,
   chat,
@@ -33,8 +35,35 @@ import {
 } from "./schema";
 import { generateHashedPassword } from "./utils";
 
-const client = postgres(process.env.POSTGRES_URL ?? "");
-const db = drizzle(client);
+/**
+ * TEMPORARY LOCAL-DEVELOPMENT BYPASS: with `DEV_BYPASS_DB=1` every query below
+ * runs against the in-memory store in `./mock` instead of Postgres, so the UI
+ * can be developed without a database. With the flag unset the original
+ * `postgres(...)` client is used, unchanged.
+ *
+ * The client is created lazily on first use, so importing this module never
+ * opens a connection while the bypass is active.
+ */
+let client: ReturnType<typeof postgres> | null = null;
+let realDb: ReturnType<typeof drizzle> | null = null;
+
+function getDb() {
+  if (!realDb) {
+    client ??= postgres(process.env.POSTGRES_URL ?? "");
+    realDb = drizzle(client);
+  }
+
+  return realDb;
+}
+
+export const db = new Proxy({} as ReturnType<typeof drizzle>, {
+  get(_target, property) {
+    const target = isDevBypassEnabled ? mockDb : getDb();
+    const value = (target as Record<string | symbol, unknown>)[property];
+
+    return typeof value === "function" ? value.bind(target) : value;
+  },
+});
 
 export async function getUser(email: string): Promise<User[]> {
   try {

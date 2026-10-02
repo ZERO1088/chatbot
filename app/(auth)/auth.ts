@@ -1,9 +1,10 @@
 import { compare } from "bcrypt-ts";
-import NextAuth, { type DefaultSession } from "next-auth";
+import NextAuth, { type DefaultSession, type Session } from "next-auth";
 import type { DefaultJWT } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
 import { DUMMY_PASSWORD } from "@/lib/constants";
 import { createGuestUser, getUser } from "@/lib/db/queries";
+import { createDevBypassSession, isDevBypassEnabled } from "@/lib/dev-bypass";
 import { authConfig } from "./auth.config";
 
 export type UserType = "guest" | "regular";
@@ -32,7 +33,7 @@ declare module "next-auth/jwt" {
 
 export const {
   handlers: { GET, POST },
-  auth,
+  auth: nextAuth,
   signIn,
   signOut,
 } = NextAuth({
@@ -97,3 +98,13 @@ export const {
     }),
   ],
 });
+
+/**
+ * TEMPORARY LOCAL-DEVELOPMENT BYPASS: with `DEV_BYPASS_DB=1` every `auth()`
+ * call returns a fixed local session, so the route guards in `app/(chat)/api/**`
+ * resolve without Postgres or a login round-trip. With the flag unset this is
+ * exactly the NextAuth `auth` export.
+ */
+export const auth: typeof nextAuth = isDevBypassEnabled
+  ? ((async () => createDevBypassSession() as Session) as typeof nextAuth)
+  : nextAuth;

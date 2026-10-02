@@ -1,4 +1,11 @@
-export const DEFAULT_CHAT_MODEL = "moonshotai/kimi-k2.5";
+export const DEFAULT_CHAT_MODEL = "deepseek/deepseek-v3.2";
+
+/**
+ * Bounded wait for the Gateway metadata endpoints. They are a nice-to-have
+ * (live capabilities, endpoint health); a slow or unreachable Gateway must not
+ * stall a chat request, so the curated capabilities below are used instead.
+ */
+const GATEWAY_LOOKUP_TIMEOUT_MS = 2500;
 
 export const titleModel = {
   description: "Fast model for title generation",
@@ -21,10 +28,24 @@ export type ChatModel = {
   description: string;
   gatewayOrder?: string[];
   reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high";
+  /**
+   * Declared capabilities, used when the Gateway metadata lookup fails or has
+   * no endpoints for the model. Without this a chat request would silently run
+   * with tools and reasoning disabled whenever the Gateway is unreachable.
+   */
+  capabilities?: ModelCapabilities;
+  /**
+   * DeepSeek's own model name. Set only on models that DeepSeek's API can serve
+   * directly (see `lib/ai/providers.ts`); the Gateway id is not a valid name
+   * there.
+   */
+  deepseekApiId?: string;
 };
 
 export const chatModels: ChatModel[] = [
   {
+    capabilities: { reasoning: true, tools: true, vision: false },
+    deepseekApiId: "deepseek-chat",
     description: "Fast and capable model with tool use",
     gatewayOrder: ["bedrock", "deepinfra"],
     id: "deepseek/deepseek-v3.2",
@@ -32,6 +53,27 @@ export const chatModels: ChatModel[] = [
     provider: "deepseek",
   },
   {
+    // DeepSeek does not guarantee function calling for its thinking model, and a
+    // rejected tool schema fails the whole turn, so tools stay off for it unless
+    // the Gateway metadata (which wins when reachable) reports support. Flip
+    // `tools` to true if your account handles tool calls in thinking mode.
+    capabilities: { reasoning: true, tools: false, vision: false },
+    deepseekApiId: "deepseek-reasoner",
+    description: "DeepSeek thinking mode, shows its reasoning",
+    id: "deepseek/deepseek-reasoner",
+    name: "DeepSeek Reasoner",
+    provider: "deepseek",
+  },
+  {
+    capabilities: { reasoning: false, tools: true, vision: false },
+    deepseekApiId: "deepseek-chat",
+    description: "DeepSeek non-thinking mode, fastest replies",
+    id: "deepseek/deepseek-chat",
+    name: "DeepSeek Chat",
+    provider: "deepseek",
+  },
+  {
+    capabilities: { reasoning: false, tools: true, vision: false },
     description: "Moonshot AI flagship model",
     gatewayOrder: ["fireworks", "bedrock"],
     id: "moonshotai/kimi-k2.5",
@@ -39,6 +81,7 @@ export const chatModels: ChatModel[] = [
     provider: "moonshotai",
   },
   {
+    capabilities: { reasoning: true, tools: true, vision: false },
     description: "Compact reasoning model",
     gatewayOrder: ["groq", "bedrock"],
     id: "openai/gpt-oss-20b",
@@ -47,6 +90,7 @@ export const chatModels: ChatModel[] = [
     reasoningEffort: "low",
   },
   {
+    capabilities: { reasoning: true, tools: true, vision: false },
     description: "Open-source 120B parameter model",
     gatewayOrder: ["fireworks", "bedrock"],
     id: "openai/gpt-oss-120b",
@@ -55,6 +99,7 @@ export const chatModels: ChatModel[] = [
     reasoningEffort: "low",
   },
   {
+    capabilities: { reasoning: false, tools: true, vision: false },
     description: "Fast non-reasoning model with tool use",
     gatewayOrder: ["xai"],
     id: "xai/grok-4.1-fast-non-reasoning",
@@ -63,22 +108,44 @@ export const chatModels: ChatModel[] = [
   },
 ];
 
+const NO_CAPABILITIES: ModelCapabilities = {
+  reasoning: false,
+  tools: false,
+  vision: false,
+};
+
+function getDeclaredCapabilities(model: ChatModel): ModelCapabilities {
+  return model.capabilities ?? NO_CAPABILITIES;
+}
+
 export async function getCapabilities(): Promise<
   Record<string, ModelCapabilities>
 > {
   const results = await Promise.all(
     chatModels.map(async (model) => {
+      const fallback = getDeclaredCapabilities(model);
+
       try {
         const res = await fetch(
           `https://ai-gateway.vercel.sh/v1/models/${model.id}/endpoints`,
-          { next: { revalidate: 86_400 } }
+          {
+            next: { revalidate: 86_400 },
+            signal: AbortSignal.timeout(GATEWAY_LOOKUP_TIMEOUT_MS),
+          }
         );
         if (!res.ok) {
-          return [model.id, { reasoning: false, tools: false, vision: false }];
+          return [model.id, fallback];
         }
 
         const json = await res.json();
         const endpoints = json.data?.endpoints ?? [];
+
+        // The Gateway does not know this model (or has no endpoint for it):
+        // keep the curated answer rather than reporting "no capabilities".
+        if (endpoints.length === 0) {
+          return [model.id, fallback];
+        }
+
         const params = new Set(
           endpoints.flatMap(
             (e: { supported_parameters?: string[] }) =>
@@ -98,7 +165,7 @@ export async function getCapabilities(): Promise<
           },
         ];
       } catch {
-        return [model.id, { reasoning: false, tools: false, vision: false }];
+        return [model.id, fallback];
       }
     })
   );
@@ -209,7 +276,10 @@ export async function getModelAvailability(
   try {
     const res = await fetch(
       `https://ai-gateway.vercel.sh/v1/models/${model.id}/endpoints`,
-      { next: { revalidate: 60 } }
+      {
+        next: { revalidate: 60 },
+        signal: AbortSignal.timeout(GATEWAY_LOOKUP_TIMEOUT_MS),
+      }
     );
     if (!res.ok) {
       return "unknown";

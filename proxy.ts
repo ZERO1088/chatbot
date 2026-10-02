@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import { guestRegex, isDevelopmentEnvironment } from "./lib/constants";
+import { isDevBypassEnabled } from "./lib/dev-bypass";
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -10,6 +11,14 @@ export async function proxy(request: NextRequest) {
   }
 
   if (pathname.startsWith("/api/auth")) {
+    return NextResponse.next();
+  }
+
+  // TEMPORARY LOCAL-DEVELOPMENT BYPASS (DEV_BYPASS_DB=1): without a token the
+  // redirect below would call /api/auth/guest, which needs a database row just
+  // to render the UI. Let the request through instead. With the flag unset this
+  // is the original behaviour.
+  if (isDevBypassEnabled) {
     return NextResponse.next();
   }
 

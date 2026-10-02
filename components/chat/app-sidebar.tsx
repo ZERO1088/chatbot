@@ -32,6 +32,8 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { useLocalChatHistory } from "@/hooks/use-local-chats";
+import { clearLocalChats } from "@/lib/local-history";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -49,6 +51,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
   const { setOpenMobile, toggleSidebar } = useSidebar();
   const { mutate } = useSWRConfig();
   const [showDeleteAllDialog, setShowDeleteAllDialog] = useState(false);
+  const localChats = useLocalChatHistory();
 
   const closeMobile = useCallback(() => {
     setOpenMobile(false);
@@ -77,6 +80,8 @@ export function AppSidebar({ user }: { user: User | undefined }) {
     fetch(`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/history`, {
       method: "DELETE",
     });
+    // Also drop the browser-side copies, otherwise they reappear in the list.
+    clearLocalChats();
 
     toast.success("All chats deleted");
   }, [mutate, router]);
@@ -131,7 +136,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                     <span className="font-medium">New chat</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
-                {user ? (
+                {user || localChats.length > 0 ? (
                   <SidebarMenuItem>
                     <SidebarMenuButton
                       className="rounded-lg text-sidebar-foreground/40 transition-colors duration-150 hover:bg-destructive/10 hover:text-destructive"

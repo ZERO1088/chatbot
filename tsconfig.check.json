@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": true,
+    "tsBuildInfoFile": "C:/Users/Asus/AppData/Local/Temp/dsh-acl-recovery-ai-chat/tsconfig.check.tsbuildinfo"
+  },
+  "exclude": [
+    "node_modules",
+    "_inspect-drizzle.ts",
+    "_probe-chain.ts",
+    "_probe-table.ts",
+    "_bypass.test.ts"
+  ]
+}

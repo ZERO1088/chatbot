@@ -29,11 +29,14 @@ import {
 const PureChatItem = ({
   chat,
   isActive,
+  isLocal = false,
   onDelete,
   setOpenMobile,
 }: {
   chat: Chat;
   isActive: boolean;
+  /** True when the conversation only exists in this browser's localStorage. */
+  isLocal?: boolean;
   onDelete: (chatId: string) => void;
   setOpenMobile: (open: boolean) => void;
 }) => {
@@ -64,8 +67,18 @@ const PureChatItem = ({
         className="h-8 rounded-none text-[13px] text-sidebar-foreground/50 transition-all duration-150 hover:bg-transparent hover:text-sidebar-foreground data-active:bg-transparent data-active:font-normal data-active:text-sidebar-foreground/50 data-[active=true]:text-sidebar-foreground data-[active=true]:font-medium data-[active=true]:border-b data-[active=true]:border-dashed data-[active=true]:border-sidebar-foreground/50"
         isActive={isActive}
       >
-        <Link href={`/chat/${chat.id}`} onClick={closeMobile}>
+        <Link
+          className="flex min-w-0 items-center gap-1.5"
+          href={`/chat/${chat.id}`}
+          onClick={closeMobile}
+          title={isLocal ? "Stored in this browser (localStorage)" : undefined}
+        >
           <span className="truncate">{chat.title}</span>
+          {isLocal ? (
+            <span className="shrink-0 rounded-full border border-sidebar-border px-1.5 py-px text-[9px] font-medium uppercase tracking-[0.08em] text-sidebar-foreground/45">
+              Local
+            </span>
+          ) : null}
         </Link>
       </SidebarMenuButton>
 
@@ -125,7 +138,15 @@ const PureChatItem = ({
 };
 
 export const ChatItem = memo(PureChatItem, (prevProps, nextProps) => {
+  // The server's generated title replaces the local one after the first turn,
+  // so the title has to take part in the comparison.
+  if (prevProps.chat.title !== nextProps.chat.title) {
+    return false;
+  }
   if (prevProps.isActive !== nextProps.isActive) {
+    return false;
+  }
+  if (prevProps.isLocal !== nextProps.isLocal) {
     return false;
   }
   return true;

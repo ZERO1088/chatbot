@@ -22,9 +22,15 @@ import { getChatHistoryPaginationKey } from "@/components/chat/sidebar-history";
 import { toast } from "@/components/chat/toast";
 import type { VisibilityType } from "@/components/chat/visibility-selector";
 import { useAutoResume } from "@/hooks/use-auto-resume";
-import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import { allowedModelIds, DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import type { Vote } from "@/lib/db/schema";
 import { ChatbotError } from "@/lib/errors";
+import {
+  deriveChatTitle,
+  getLocalChat,
+  mergeMessages,
+  saveLocalChatMessages,
+} from "@/lib/local-history";
 import type { ChatMessage } from "@/lib/types";
 import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
 
@@ -56,6 +62,29 @@ function extractChatId(pathname: string): string | null {
   return match ? match[1] : null;
 }
 
+/** The model picker stores its choice in this cookie (see `multimodal-input`). */
+function readChatModelCookie(): string | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  const row = document.cookie
+    .split("; ")
+    .find((entry) => entry.startsWith("chat-model="));
+
+  if (!row) {
+    return null;
+  }
+
+  const value = row.slice("chat-model=".length);
+
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export function ActiveChatProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { setDataStream, setWaitingStatus } = useDataStream();
@@ -78,6 +107,17 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     currentModelIdRef.current = currentModelId;
   }, [currentModelId]);
+
+  // Re-apply the model chosen last time as soon as the client mounts, so it
+  // survives a refresh on a brand-new chat too (the old code only restored it
+  // once an existing chat had loaded).
+  useEffect(() => {
+    const cookieModel = readChatModelCookie();
+
+    if (cookieModel && allowedModelIds.has(cookieModel)) {
+      setCurrentModelId(cookieModel);
+    }
+  }, []);
 
   const [input, setInput] = useState("");
   const [showCreditCardAlert, setShowCreditCardAlert] = useState(false);
@@ -182,20 +222,76 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
   }, [status, setWaitingStatus]);
 
   const loadedChatIds = useRef(new Set<string>());
+  const restoredChatIds = useRef(new Set<string>());
 
   if (isNewChat && !loadedChatIds.current.has(newChatIdRef.current)) {
     loadedChatIds.current.add(newChatIdRef.current);
   }
 
+  // Instant restore from localStorage: a refresh (or a dev-server restart that
+  // wiped the server-side copy) shows the conversation immediately instead of
+  // an empty thread waiting on the API.
+  //
+  // The gate is "the live thread is empty" rather than a once-per-chat-id flag,
+  // because navigating away and back creates a fresh, empty Chat for that id —
+  // the stored conversation has to be restored again. It can never run while
+  // messages are on screen, so it cannot fight an in-flight stream.
   useEffect(() => {
-    if (loadedChatIds.current.has(chatId)) {
+    if (isNewChat || messages.length > 0) {
       return;
     }
-    if (chatData?.messages) {
-      loadedChatIds.current.add(chatId);
-      setMessages(chatData.messages);
+
+    const localMessages = getLocalChat(chatId)?.messages ?? [];
+
+    if (localMessages.length === 0) {
+      return;
     }
-  }, [chatId, chatData?.messages, setMessages]);
+
+    setMessages(localMessages);
+  }, [chatId, isNewChat, messages.length, setMessages]);
+
+  // Then fold in the server copy, once, when it arrives. `mergeMessages` keeps
+  // the thread in order and never drops a message, so neither the API nor
+  // localStorage can silently truncate the conversation.
+  useEffect(() => {
+    if (isNewChat || loadedChatIds.current.has(chatId)) {
+      return;
+    }
+    if (restoredChatIds.current.has(`server:${chatId}`)) {
+      return;
+    }
+
+    const serverMessages: ChatMessage[] | undefined = chatData?.messages;
+
+    if (serverMessages === undefined) {
+      return;
+    }
+
+    restoredChatIds.current.add(`server:${chatId}`);
+    setMessages((current) =>
+      mergeMessages(
+        serverMessages,
+        current.length > 0 ? current : (getLocalChat(chatId)?.messages ?? [])
+      )
+    );
+  }, [chatId, isNewChat, chatData?.messages, setMessages]);
+
+  // Mirror the active conversation into localStorage so a page refresh (or a
+  // dev-server restart that wipes the in-memory store) keeps it. The write
+  // itself is debounced inside the store, so streaming stays cheap.
+  useEffect(() => {
+    // Never mirror someone else's shared (read-only) chat into this browser.
+    if (messages.length === 0 || chatData?.isReadonly === true) {
+      return;
+    }
+
+    saveLocalChatMessages({
+      id: chatId,
+      messages,
+      title: deriveChatTitle(messages),
+      visibility,
+    });
+  }, [chatId, messages, visibility, chatData?.isReadonly]);
 
   const prevChatIdRef = useRef(chatId);
   useEffect(() => {
@@ -209,12 +305,10 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (chatData && !isNewChat) {
-      const cookieModel = document.cookie
-        .split("; ")
-        .find((row) => row.startsWith("chat-model="))
-        ?.split("=")[1];
+      const cookieModel = readChatModelCookie();
+
       if (cookieModel) {
-        setCurrentModelId(decodeURIComponent(cookieModel));
+        setCurrentModelId(cookieModel);
       }
     }
   }, [chatData, isNewChat]);

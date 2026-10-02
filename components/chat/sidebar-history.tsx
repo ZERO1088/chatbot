@@ -24,17 +24,19 @@ import {
   SidebarMenu,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { useLocalChatHistory } from "@/hooks/use-local-chats";
 import type { Chat } from "@/lib/db/schema";
+import { deleteLocalChat, type LocalChatSummary } from "@/lib/local-history";
 import { fetcher } from "@/lib/utils";
 import { LoaderIcon } from "./icons";
 import { ChatItem } from "./sidebar-history-item";
 
 type GroupedChats = {
-  today: Chat[];
-  yesterday: Chat[];
-  lastWeek: Chat[];
-  lastMonth: Chat[];
-  older: Chat[];
+  today: SidebarChat[];
+  yesterday: SidebarChat[];
+  lastWeek: SidebarChat[];
+  lastMonth: SidebarChat[];
+  older: SidebarChat[];
 };
 
 export type ChatHistory = {
@@ -44,7 +46,38 @@ export type ChatHistory = {
 
 const PAGE_SIZE = 20;
 
-const groupChatsByDate = (chats: Chat[]): GroupedChats => {
+/** A sidebar row, plus whether it only exists in localStorage. */
+export type SidebarChat = Chat & { isLocalOnly?: boolean };
+
+/**
+ * Server chats first (they carry the generated title), then the conversations
+ * that only exist in localStorage. Without this, the history list would look
+ * empty after a dev-server restart even though the threads are still on disk.
+ */
+const mergeWithLocalChats = (
+  serverChats: Chat[],
+  localChats: LocalChatSummary[]
+): SidebarChat[] => {
+  const knownIds = new Set(serverChats.map((chat) => chat.id));
+
+  const localOnly: SidebarChat[] = localChats
+    .filter((chat) => !knownIds.has(chat.id))
+    .map((chat) => ({
+      createdAt: new Date(chat.createdAt),
+      id: chat.id,
+      isLocalOnly: true,
+      title: chat.title,
+      userId: "",
+      visibility: chat.visibility,
+    }));
+
+  return [...serverChats, ...localOnly].sort(
+    (left, right) =>
+      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+  );
+};
+
+const groupChatsByDate = (chats: SidebarChat[]): GroupedChats => {
   const now = new Date();
   const oneWeekAgo = subWeeks(now, 1);
   const oneMonthAgo = subMonths(now, 1);
@@ -119,13 +152,26 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
-  const hasReachedEnd = paginatedChatHistories
-    ? paginatedChatHistories.some((page) => page.hasMore === false)
-    : false;
+  // A logged-out visitor has no server-side history at all, so whatever the
+  // list holds (local conversations included) is already the whole list.
+  const hasReachedEnd =
+    !user ||
+    (paginatedChatHistories
+      ? paginatedChatHistories.some((page) => page.hasMore === false)
+      : false);
 
-  const hasEmptyChatHistory = paginatedChatHistories
-    ? paginatedChatHistories.every((page) => page.chats.length === 0)
-    : false;
+  const localChats = useLocalChatHistory();
+
+  // Server history and the localStorage mirror are one list: a conversation
+  // present in both keeps the server's generated title.
+  const chatsFromHistory = mergeWithLocalChats(
+    paginatedChatHistories
+      ? paginatedChatHistories.flatMap((page) => page.chats)
+      : [],
+    localChats
+  );
+
+  const hasEmptyChatHistory = chatsFromHistory.length === 0;
 
   const handleDelete = useCallback(() => {
     const chatToDelete = deleteId;
@@ -151,6 +197,11 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
       { method: "DELETE" }
     );
 
+    if (chatToDelete) {
+      // Drop the browser-side copy too, otherwise it stays in the list.
+      deleteLocalChat(chatToDelete);
+    }
+
     toast.success("Chat deleted");
   }, [deleteId, mutate, pathname, router]);
 
@@ -165,7 +216,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     }
   }, [hasReachedEnd, isValidating, setSize]);
 
-  if (!user) {
+  if (!user && localChats.length === 0) {
     return (
       <SidebarGroup className="group-data-[collapsible=icon]:hidden">
         <SidebarGroupContent>
@@ -177,7 +228,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     );
   }
 
-  if (isLoading) {
+  if (isLoading && localChats.length === 0) {
     return (
       <SidebarGroup className="group-data-[collapsible=icon]:hidden">
         <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/70">
@@ -229,12 +280,8 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
         </SidebarGroupLabel>
         <SidebarGroupContent>
           <SidebarMenu>
-            {paginatedChatHistories
+            {chatsFromHistory.length > 0
               ? (() => {
-                  const chatsFromHistory = paginatedChatHistories.flatMap(
-                    (paginatedChatHistory) => paginatedChatHistory.chats
-                  );
-
                   const groupedChats = groupChatsByDate(chatsFromHistory);
 
                   return (
@@ -248,6 +295,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                             <ChatItem
                               chat={chat}
                               isActive={chat.id === id}
+                              isLocal={chat.isLocalOnly === true}
                               key={chat.id}
                               onDelete={handleShowDeleteDialog}
                               setOpenMobile={setOpenMobile}
@@ -265,6 +313,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                             <ChatItem
                               chat={chat}
                               isActive={chat.id === id}
+                              isLocal={chat.isLocalOnly === true}
                               key={chat.id}
                               onDelete={handleShowDeleteDialog}
                               setOpenMobile={setOpenMobile}
@@ -282,6 +331,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                             <ChatItem
                               chat={chat}
                               isActive={chat.id === id}
+                              isLocal={chat.isLocalOnly === true}
                               key={chat.id}
                               onDelete={handleShowDeleteDialog}
                               setOpenMobile={setOpenMobile}
@@ -299,6 +349,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                             <ChatItem
                               chat={chat}
                               isActive={chat.id === id}
+                              isLocal={chat.isLocalOnly === true}
                               key={chat.id}
                               onDelete={handleShowDeleteDialog}
                               setOpenMobile={setOpenMobile}
@@ -316,6 +367,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                             <ChatItem
                               chat={chat}
                               isActive={chat.id === id}
+                              isLocal={chat.isLocalOnly === true}
                               key={chat.id}
                               onDelete={handleShowDeleteDialog}
                               setOpenMobile={setOpenMobile}

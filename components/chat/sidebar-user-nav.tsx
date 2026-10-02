@@ -19,6 +19,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { guestRegex } from "@/lib/constants";
+import { clearLocalChats } from "@/lib/local-history";
 import { LoaderIcon } from "./icons";
 import { toast } from "./toast";
 
@@ -53,6 +54,10 @@ export function SidebarUserNav({ user }: { user: User }) {
     if (isGuest) {
       router.push("/login");
     } else {
+      // The browser-stored conversations belong to the user who is leaving;
+      // drop them so the next account on a shared browser cannot read them.
+      clearLocalChats();
+
       signOut({
         redirectTo: "/",
       });

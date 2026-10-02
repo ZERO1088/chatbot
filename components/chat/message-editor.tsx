@@ -15,7 +15,12 @@ export async function submitEditedMessage({
   setMessages: UseChatHelpers<ChatMessage>["setMessages"];
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
 }) {
-  await deleteTrailingMessages({ id: message.id });
+  try {
+    await deleteTrailingMessages({ id: message.id });
+  } catch {
+    // The chat may only exist in localStorage (e.g. after a server restart or a
+    // dev-bypass reset). The local edit still applies, so this is not fatal.
+  }
 
   setMessages((messages) => {
     const index = messages.findIndex((m) => m.id === message.id);
